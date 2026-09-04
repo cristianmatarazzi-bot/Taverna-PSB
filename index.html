@@ -12,7 +12,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone@7.28.5/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
   :root {
@@ -35,8 +35,10 @@
   .card-lift { transition: transform .2s ease, box-shadow .2s ease; }
   .card-lift:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(8,26,61,.13); }
   .seat-occupato { background: linear-gradient(135deg, #d3b455 0%, #9c7722 100%); color: white; border: 1px solid rgba(255,255,255,.22); }
+  .seat-pagato { background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; border: 1px solid rgba(255,255,255,.22); }
   .seat-libero { background: rgba(255,255,255,.9); color: #6b7280; border: 1px dashed #c7cfdb; }
   .seat-extra { background: linear-gradient(135deg, #e54856 0%, #a8172c 100%); color: white; border: 1px solid #8f1425; box-shadow: 0 8px 18px rgba(201,45,61,.20); }
+  .seat-extra-pagato { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: white; border: 1px solid rgba(255,255,255,.22); box-shadow: 0 8px 18px rgba(20,184,166,.20); }
   .over-badge { background: #fff0f1; color: #b91c2c; border: 1px solid #fecdd3; box-shadow: 0 0 0 3px rgba(201,45,61,.08); }
   .scroll-x::-webkit-scrollbar { height: 6px; }
   .scroll-x::-webkit-scrollbar-thumb { background: #c8a847; border-radius: 10px; }
@@ -56,13 +58,13 @@ const { useState, useEffect, useMemo, useRef, useCallback, Fragment, forwardRef 
 // CONFIGURAZIONE - MODIFICA QUI CON I TUOI DATI FIREBASE
 // ============================================================
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyAc7LyUfVpp4LOcswBIBkTU2pcN5Ka5PQw",
-  authDomain: "taverna-porta-san-benedetto.firebaseapp.com",
-  databaseURL: "https://taverna-porta-san-benedetto-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "taverna-porta-san-benedetto",
-  storageBucket: "taverna-porta-san-benedetto.firebasestorage.app",
-  messagingSenderId: "307088497576",
-  appId: "1:307088497576:web:ec0db7c3f1164af0605b9d"
+  apiKey: "INSERISCI_API_KEY",
+  authDomain: "INSERISCI_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://INSERISCI_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId: "INSERISCI_PROJECT_ID",
+  storageBucket: "INSERISCI_PROJECT_ID.appspot.com",
+  messagingSenderId: "INSERISCI_SENDER_ID",
+  appId: "INSERISCI_APP_ID"
 };
 const CODICE_ACCESSO = "tavernapsb2026";
 // ============================================================
@@ -139,6 +141,16 @@ const fmtDataLunga = (iso) => {
 const oggiISO = () => new Date().toISOString().slice(0, 10);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+// Normalizza un numero di telefono per WhatsApp (formato senza + iniziale)
+const normalizzaTelefono = (tel) => {
+  if (!tel) return '';
+  let n = String(tel).replace(/[^0-9]/g, '');
+  if (n.startsWith('00')) n = n.slice(2);
+  // Cellulare italiano tipico: 10 cifre che iniziano con 3
+  if (n.length === 10 && n.startsWith('3')) n = '39' + n;
+  return n;
+};
+
 const useDB = (path) => {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
@@ -146,12 +158,7 @@ const useDB = (path) => {
     if (!db) { setLoading(false); return; }
     const ref = db.ref(path);
     const cb = (snap) => { setData(snap.val() || {}); setLoading(false); };
-    const onError = (error) => {
-      console.error(`Firebase read error on ${path}`, error);
-      setData({});
-      setLoading(false);
-    };
-    ref.on('value', cb, onError);
+    ref.on('value', cb);
     return () => ref.off('value', cb);
   }, [path]);
   return [data, loading];
@@ -159,25 +166,13 @@ const useDB = (path) => {
 
 const dbSet = (path, value) => db && db.ref(path).set(value);
 const dbPush = (path, value) => {
-  if (!db) return Promise.reject(new Error('Firebase non è collegato'));
+  if (!db) return null;
   const ref = db.ref(path).push();
-  return ref.set({ ...value, id: ref.key }).then(() => ref.key);
+  ref.set({ ...value, id: ref.key });
+  return ref.key;
 };
 const dbUpdate = (path, value) => db && db.ref(path).update(value);
 const dbRemove = (path) => db && db.ref(path).remove();
-
-const messaggioErroreFirebase = (errore) => {
-  const codice = String(errore?.code || '').toLowerCase();
-  if (codice.includes('permission-denied')) {
-    return 'Firebase non consente il salvataggio. Controlla le regole del Realtime Database.';
-  }
-  if (codice.includes('network') || !navigator.onLine) {
-    return 'Connessione assente o instabile. Controlla Internet e riprova.';
-  }
-  return errore?.message
-    ? `Salvataggio non riuscito: ${errore.message}`
-    : 'Salvataggio non riuscito. Riprova tra qualche istante.';
-};
 
 // ============================================================
 // COMPONENTI UI
@@ -205,6 +200,7 @@ const Btn = ({ children, onClick, variant = 'primary', className = '', type = 'b
     ghost: 'bg-white text-blue-900 hover:bg-blue-50 border border-blue-200',
     danger: 'bg-red-500 text-white hover:bg-red-600',
     success: 'bg-emerald-600 text-white hover:bg-emerald-700',
+    whatsapp: 'bg-[#25D366] text-white hover:bg-[#128C7E]',
   };
   return (
     <button type={type} onClick={onClick} disabled={disabled}
@@ -242,6 +238,27 @@ const TextArea = ({ label, ...props }) => (
       className="w-full px-3 py-2.5 rounded-xl border border-gray-300 focus:border-blue-700 focus:ring-2 focus:ring-blue-200 outline-none text-sm" />
   </div>
 );
+
+const Toggle = ({ label, hint, checked, onChange, color = 'emerald' }) => {
+  const colors = {
+    emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-900', textSm: 'text-emerald-700', dot: 'bg-emerald-500' },
+    blue: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-900', textSm: 'text-blue-700', dot: 'bg-blue-500' },
+  };
+  const c = colors[color];
+  return (
+    <div className={`flex items-center justify-between ${c.bg} border ${c.border} rounded-xl px-4 py-3`}>
+      <div>
+        <p className={`text-sm font-semibold ${c.text}`}>{label}</p>
+        {hint && <p className={`text-xs ${c.textSm}`}>{hint}</p>}
+      </div>
+      <button type="button" onClick={() => onChange(!checked)}
+        className={`relative w-14 h-8 rounded-full transition flex-shrink-0 ml-3 ${checked ? c.dot : 'bg-gray-300'}`}
+        aria-pressed={checked}>
+        <span className={`absolute top-1 left-1 w-6 h-6 bg-white rounded-full shadow transition ${checked ? 'translate-x-6' : ''}`}></span>
+      </button>
+    </div>
+  );
+};
 
 const EmptyState = ({ icon = '📋', title, hint, action }) => (
   <div className="text-center py-12 px-4">
@@ -817,60 +834,29 @@ const FornitoriSection = ({ fornitori }) => {
 // ============================================================
 // SALA - MODAL EVENTO
 // ============================================================
-const EventoModal = ({ evento, tavoli, onClose, onSaved }) => {
+const EventoModal = ({ evento, tavoli, onClose }) => {
   const isNew = !evento.id;
   const [form, setForm] = useState({
     nome: '', data: oggiISO(), tipo: 'cena', note: '', ricorrente: false, ...evento
   });
-  const [salvataggio, setSalvataggio] = useState(false);
-  const [errore, setErrore] = useState('');
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const salva = async () => {
+  const salva = () => {
     if (!form.nome.trim()) return alert('Nome evento obbligatorio');
     if (!form.data) return alert('Data obbligatoria');
-    if (salvataggio) return;
-
-    setSalvataggio(true);
-    setErrore('');
-    try {
-      if (!db || !firebaseOk) throw new Error('collegamento a Firebase non disponibile');
-
-      let eventoId = evento.id;
-      if (isNew) {
-        const tavoliEv = {};
-        Object.values(tavoli || {})
-          .filter(t => t && t.id && Number(t.posti) > 0)
-          .forEach(t => {
-            const posti = Number(t.posti);
-            tavoliEv[t.id] = {
-              numero: Number(t.numero), posti, sala: t.sala,
-              commensali: Array.from({ length: posti }, () => ({ nome: '', note: '', telefono: '' }))
-            };
-          });
-
-        if (Object.keys(tavoliEv).length === 0) {
-          throw new Error('nessun tavolo disponibile per il nuovo evento');
-        }
-
-        eventoId = await dbPush('taverna/eventi', {
-          ...form,
-          nome: form.nome.trim(),
-          tavoli: tavoliEv,
-          createdAt: Date.now()
-        });
-      } else {
-        const { tavoli: _, ...payload } = form;
-        await dbUpdate(`taverna/eventi/${evento.id}`, { ...payload, nome: form.nome.trim() });
-      }
-
-      if (onSaved) onSaved(eventoId, isNew);
-      else onClose();
-    } catch (e) {
-      console.error('Errore salvataggio evento', e);
-      setErrore(messaggioErroreFirebase(e));
-    } finally {
-      setSalvataggio(false);
+    if (isNew) {
+      const tavoliEv = {};
+      Object.values(tavoli).forEach(t => {
+        tavoliEv[t.id] = {
+          numero: t.numero, posti: t.posti, sala: t.sala,
+          commensali: Array(t.posti).fill(null).map(() => ({ nome: '', note: '', telefono: '', pagato: false }))
+        };
+      });
+      dbPush('taverna/eventi', { ...form, tavoli: tavoliEv, createdAt: Date.now() });
+    } else {
+      const { tavoli: _, ...payload } = form;
+      dbUpdate(`taverna/eventi/${evento.id}`, payload);
     }
+    onClose();
   };
   const elimina = () => {
     if (confirm(`Eliminare l'evento "${form.nome}"? Tutte le prenotazioni andranno perse.`)) {
@@ -895,18 +881,10 @@ const EventoModal = ({ evento, tavoli, onClose, onSaved }) => {
             ℹ️ Verrà creata una mappa con tutti i {Object.keys(tavoli).length} tavoli configurati ({Object.values(tavoli).reduce((s, t) => s + (t.posti || 0), 0)} posti).
           </div>
         )}
-        {errore && (
-          <div role="alert" className="bg-red-50 border border-red-300 rounded-xl p-3 text-sm text-red-800">
-            <p className="font-bold">⚠️ L’evento non è stato salvato</p>
-            <p className="mt-1">{errore}</p>
-          </div>
-        )}
         <div className="flex gap-2 pt-2">
           {!isNew && <Btn variant="danger" onClick={elimina}>🗑️ Elimina</Btn>}
-          <Btn variant="ghost" onClick={onClose} disabled={salvataggio} className="flex-1">Annulla</Btn>
-          <Btn onClick={salva} disabled={salvataggio} className="flex-1">
-            {salvataggio ? '⏳ Salvataggio…' : (isNew ? 'Crea e apri' : 'Salva')}
-          </Btn>
+          <Btn variant="ghost" onClick={onClose} className="flex-1">Annulla</Btn>
+          <Btn onClick={salva} className="flex-1">{isNew ? 'Crea' : 'Salva'}</Btn>
         </div>
       </div>
     </Modal>
@@ -930,17 +908,17 @@ const EventiSection = ({ eventi, tavoli, onApriEvento }) => {
     .sort((a, b) => filtroData === 'passati' ? (b.data || '').localeCompare(a.data || '') : (a.data || '').localeCompare(b.data || ''));
 
   const calcPosti = (ev) => {
-    const tavoliBase = {};
-    TAVOLI_DEFAULT.forEach(t => { tavoliBase[t.id] = t; });
-    const tavoliEv = { ...tavoliBase, ...(ev.tavoli || {}) };
-    let occupati = 0, totale = 0, extra = 0;
+    const tavoliEv = ev.tavoli || {};
+    let occupati = 0, totale = 0, extra = 0, pagati = 0;
     Object.values(tavoliEv).forEach(t => {
       totale += t.posti || 0;
       const occupatiTavolo = (t.commensali || []).filter(c => c && c.nome).length;
+      const pagatiTavolo = (t.commensali || []).filter(c => c && c.nome && c.pagato).length;
       occupati += occupatiTavolo;
+      pagati += pagatiTavolo;
       extra += Math.max(0, occupatiTavolo - (t.posti || 0));
     });
-    return { occupati, totale, extra };
+    return { occupati, totale, extra, pagati };
   };
 
   return (
@@ -964,8 +942,9 @@ const EventiSection = ({ eventi, tavoli, onApriEvento }) => {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {lista.map(ev => {
-            const { occupati, totale, extra } = calcPosti(ev);
+            const { occupati, totale, extra, pagati } = calcPosti(ev);
             const percent = totale > 0 ? Math.min(100, Math.round((occupati / totale) * 100)) : 0;
+            const percentPagati = occupati > 0 ? Math.round((pagati / occupati) * 100) : 0;
             return (
               <div key={ev.id} className={`surface-card card-lift rounded-3xl overflow-hidden ${extra > 0 ? 'ring-2 ring-red-300' : ''}`}>
                 <div className="psb-gradient text-white p-4">
@@ -985,10 +964,21 @@ const EventiSection = ({ eventi, tavoli, onApriEvento }) => {
                   <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
                     <div className={`${extra > 0 ? 'bg-red-500' : 'psb-gradient'} h-full transition-all`} style={{ width: `${percent}%` }}></div>
                   </div>
+                  {occupati > 0 && (
+                    <>
+                      <div className="flex justify-between text-xs mt-3 mb-1">
+                        <span className="text-emerald-700 font-semibold">💰 Quote pagate</span>
+                        <span className="font-bold text-emerald-700">{pagati} / {occupati} ({percentPagati}%)</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                        <div className="bg-emerald-500 h-full transition-all" style={{ width: `${percentPagati}%` }}></div>
+                      </div>
+                    </>
+                  )}
                   {extra > 0 && <div className="mt-3 over-badge rounded-xl px-3 py-2 text-xs font-bold flex justify-between"><span>⚠️ Capienza superata</span><span>+{extra} extra</span></div>}
                   <div className="flex gap-2 mt-3">
                     <Btn variant="ghost" onClick={() => setEditing(ev)} className="flex-1">Modifica</Btn>
-                    <Btn variant="gold" onClick={() => onApriEvento(ev.id)} className="flex-1">Apri tavoli e prenotazioni</Btn>
+                    <Btn variant="gold" onClick={() => onApriEvento(ev.id)} className="flex-1">Gestisci posti</Btn>
                   </div>
                 </div>
               </div>
@@ -997,31 +987,19 @@ const EventiSection = ({ eventi, tavoli, onApriEvento }) => {
         </div>
       )}
 
-      {editing && (
-        <EventoModal
-          evento={editing}
-          tavoli={tavoli}
-          onClose={() => setEditing(null)}
-          onSaved={(eventoId, creato) => {
-            setEditing(null);
-            if (creato) {
-              setFiltroData('tutti');
-              onApriEvento(eventoId);
-            }
-          }}
-        />
-      )}
+      {editing && <EventoModal evento={editing} tavoli={tavoli} onClose={() => setEditing(null)} />}
     </div>
   );
 };
 
 // ============================================================
-// EDITOR POSTO (singolo commensale)
+// EDITOR POSTO (singolo commensale) - con Pagato + WhatsApp
 // ============================================================
-const PostoEditor = ({ commensale, numeroPosto, posizionePosto = numeroPosto, tavoloNumero, tuttiCommensali, onSalva, onClose, isExtra = false }) => {
+const PostoEditor = ({ commensale, numeroPosto, posizionePosto = numeroPosto, tavoloNumero, tavoloSala, evento, tuttiCommensali, onSalva, onClose, isExtra = false }) => {
   const [nome, setNome] = useState(commensale?.nome || '');
   const [telefono, setTelefono] = useState(commensale?.telefono || '');
   const [note, setNote] = useState(commensale?.note || '');
+  const [pagato, setPagato] = useState(!!commensale?.pagato);
   const [suggerimenti, setSuggerimenti] = useState([]);
   const inputRef = useRef(null);
 
@@ -1045,8 +1023,33 @@ const PostoEditor = ({ commensale, numeroPosto, posizionePosto = numeroPosto, ta
     );
   }, [nome, tuttiCommensali, tavoloNumero, posizionePosto]);
 
-  const salva = () => onSalva({ nome: nome.trim(), telefono: telefono.trim(), note: note.trim() });
-  const libera = () => onSalva({ nome: '', telefono: '', note: '' });
+  const salva = () => onSalva({ nome: nome.trim(), telefono: telefono.trim(), note: note.trim(), pagato });
+  const libera = () => onSalva({ nome: '', telefono: '', note: '', pagato: false });
+
+  const telefonoValido = normalizzaTelefono(telefono).length >= 10;
+  const canWhatsApp = nome.trim() && telefonoValido && evento;
+
+  const inviaWhatsApp = () => {
+    if (!canWhatsApp) return;
+    const numero = normalizzaTelefono(telefono);
+    const articolo = evento.tipo === 'cena' ? 'alla cena' : evento.tipo === 'pranzo' ? 'al pranzo' : "all'evento";
+    const emoji = evento.tipo === 'cena' ? '🌙' : evento.tipo === 'pranzo' ? '☀️' : '🎉';
+    const posizione = isExtra
+      ? `Tavolo ${tavoloNumero} (persona extra ${numeroPosto})`
+      : `Tavolo ${tavoloNumero}, posto ${numeroPosto}`;
+    const righe = [
+      `Ciao ${nome.split(' ')[0] || nome}! 🏛️`,
+      '',
+      `Ti confermiamo l'iscrizione ${articolo} *${evento.nome}*`,
+      `${emoji} ${fmtDataLunga(evento.data)}`,
+      `🍽️ Sala ${tavoloSala} — ${posizione}`,
+    ];
+    if (pagato) righe.push('💰 Quota versata ✓');
+    if (note.trim()) righe.push('', `📝 Note: ${note.trim()}`);
+    righe.push('', 'Ti aspettiamo!', '_Porta San Benedetto_');
+    const url = `https://wa.me/${numero}?text=${encodeURIComponent(righe.join('\n'))}`;
+    window.open(url, '_blank');
+  };
 
   return (
     <Modal open={true} onClose={onClose} title={isExtra ? `Tavolo ${tavoloNumero} – Persona extra ${numeroPosto}` : `Tavolo ${tavoloNumero} – Posto ${numeroPosto}`} size="sm">
@@ -1070,8 +1073,26 @@ const PostoEditor = ({ commensale, numeroPosto, posizionePosto = numeroPosto, ta
             ⚠️ "{duplicato.nome}" è già al tavolo {duplicato.tavolo}, posto {duplicato.posto}
           </div>
         )}
-        <Input label="Telefono (opzionale)" value={telefono} onChange={e => setTelefono(e.target.value)} />
+        <Input label="Telefono (WhatsApp)" value={telefono} onChange={e => setTelefono(e.target.value)}
+          placeholder="Es. 333 1234567" inputMode="tel" />
         <TextArea label="Note (allergie, intolleranze, esigenze)" rows={2} value={note} onChange={e => setNote(e.target.value)} />
+
+        <Toggle
+          label="💰 Quota pagata"
+          hint="Attiva se il commensale ha già versato la quota"
+          checked={pagato}
+          onChange={setPagato}
+          color="emerald"
+        />
+
+        {evento && (
+          <button type="button" onClick={inviaWhatsApp} disabled={!canWhatsApp}
+            className={`w-full rounded-xl py-3 font-bold text-sm flex items-center justify-center gap-2 transition shadow-sm ${canWhatsApp ? 'bg-[#25D366] text-white hover:bg-[#128C7E]' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
+            <span className="text-lg">📱</span>
+            <span>{canWhatsApp ? 'Invia conferma su WhatsApp' : 'Serve nome e telefono valido'}</span>
+          </button>
+        )}
+
         <div className="flex gap-2 pt-2">
           {commensale?.nome && <Btn variant="danger" onClick={libera}>{isExtra ? 'Rimuovi extra' : 'Libera posto'}</Btn>}
           <Btn variant="ghost" onClick={onClose} className="flex-1">Annulla</Btn>
@@ -1085,8 +1106,8 @@ const PostoEditor = ({ commensale, numeroPosto, posizionePosto = numeroPosto, ta
 // ============================================================
 // MODAL TAVOLO - vista posti
 // ============================================================
-const TavoloModal = ({ tavolo, tavoloId, eventoId, tuttiCommensali, onClose }) => {
-  const postoVuoto = () => ({ nome: '', note: '', telefono: '' });
+const TavoloModal = ({ tavolo, tavoloId, eventoId, evento, tuttiCommensali, onClose }) => {
+  const postoVuoto = () => ({ nome: '', note: '', telefono: '', pagato: false });
   const [commensali, setCommensali] = useState(() => {
     const salvati = Array.isArray(tavolo.commensali) ? tavolo.commensali : [];
     const quanti = Math.max(Number(tavolo.posti) || 0, salvati.length);
@@ -1105,10 +1126,10 @@ const TavoloModal = ({ tavolo, tavoloId, eventoId, tuttiCommensali, onClose }) =
   };
 
   const occ = commensali.filter(c => c && c.nome).length;
+  const pagati = commensali.filter(c => c && c.nome && c.pagato).length;
   const extra = Math.max(0, occ - tavolo.posti);
   const baseCompleta = commensali.slice(0, tavolo.posti).every(c => c && c.nome);
   const extraCompilati = commensali.slice(tavolo.posti).every(c => c && c.nome);
-  const primoPostoLibero = commensali.slice(0, tavolo.posti).findIndex(c => !c || !c.nome);
   const salaColor = tavolo.sala === 'gialla' ? 'bg-amber-400' : 'bg-blue-400';
 
   return (
@@ -1118,33 +1139,38 @@ const TavoloModal = ({ tavolo, tavoloId, eventoId, tuttiCommensali, onClose }) =
           <div>
             <span className="font-semibold">Occupazione</span>
             <p className="text-xs text-white/80">{extra > 0 ? `Capienza superata di ${extra}` : baseCompleta ? 'Tavolo completo' : `${tavolo.posti - occ} posti disponibili`}</p>
+            {occ > 0 && <p className="text-xs text-white/90 mt-0.5">💰 {pagati} pagati su {occ}</p>}
           </div>
           <span className="font-display text-2xl">{occ} <span className="text-white/70">/ {tavolo.posti}</span></span>
-        </div>
-
-        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
-          <p className="text-sm font-semibold text-blue-950">Prenotazioni del tavolo</p>
-          <p className="text-xs text-blue-700 mt-0.5">Seleziona un posto oppure usa il pulsante: potrai inserire cognome e nome, telefono e allergie o intolleranze.</p>
-          {!baseCompleta && primoPostoLibero >= 0 && (
-            <Btn onClick={() => setEditPosto(primoPostoLibero)} className="w-full mt-3">＋ Inserisci una persona</Btn>
-          )}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {commensali.map((c, idx) => {
             const occupato = c && c.nome;
             const isExtra = idx >= tavolo.posti;
+            const isPagato = occupato && c.pagato;
+            let seatClass;
+            if (isExtra) seatClass = isPagato ? 'seat-extra-pagato' : 'seat-extra';
+            else if (occupato) seatClass = isPagato ? 'seat-pagato' : 'seat-occupato';
+            else seatClass = 'seat-libero hover:bg-blue-50';
             return (
               <button key={idx} onClick={() => setEditPosto(idx)}
-                className={`rounded-2xl p-3 text-left card-lift ${isExtra ? 'seat-extra' : occupato ? 'seat-occupato shadow-md' : 'seat-libero hover:bg-blue-50'}`}>
+                className={`rounded-2xl p-3 text-left card-lift ${seatClass}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className={`text-xs font-bold ${occupato || isExtra ? 'text-white/75' : 'text-gray-400'}`}>{isExtra ? `EXTRA ${idx - tavolo.posti + 1}` : `POSTO ${idx + 1}`}</span>
-                  {isExtra ? <span className="text-[10px] bg-white/20 rounded-full px-1.5 py-0.5">+1</span> : occupato && <span className="text-xs">👤</span>}
+                  <span className="text-xs flex gap-0.5">
+                    {isExtra && !isPagato && <span className="text-[10px] bg-white/20 rounded-full px-1.5 py-0.5">+1</span>}
+                    {isPagato && <span title="Pagato">💰</span>}
+                    {occupato && !isPagato && !isExtra && <span>👤</span>}
+                  </span>
                 </div>
                 {occupato ? (
                   <>
                     <p className="font-semibold text-sm leading-tight truncate">{c.nome}</p>
-                    {c.note && <p className="text-[10px] text-white/80 mt-1 truncate">⚠ {c.note}</p>}
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      {c.telefono && <span className="text-[10px] text-white/80 bg-white/15 rounded-full px-1.5 py-0.5">📞</span>}
+                      {c.note && <span className="text-[10px] text-white/80 truncate">⚠ {c.note}</span>}
+                    </div>
                   </>
                 ) : (
                   <p className="text-xs text-gray-400 italic">libero</p>
@@ -1154,11 +1180,13 @@ const TavoloModal = ({ tavolo, tavoloId, eventoId, tuttiCommensali, onClose }) =
           })}
         </div>
 
-        {baseCompleta && (
+        {baseCompleta ? (
           <button onClick={() => setEditPosto(commensali.length)} disabled={!extraCompilati}
             className="w-full rounded-2xl border-2 border-dashed border-red-300 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 hover:bg-red-100 transition disabled:opacity-50 disabled:cursor-not-allowed">
             ＋ Aggiungi persona extra
           </button>
+        ) : (
+          <p className="text-center text-xs text-gray-500 bg-white/70 border border-gray-200 rounded-xl px-3 py-2">Il pulsante per le persone extra apparirà quando tutti i {tavolo.posti} posti saranno occupati.</p>
         )}
 
         <Btn variant="ghost" onClick={onClose} className="w-full">Chiudi</Btn>
@@ -1168,6 +1196,8 @@ const TavoloModal = ({ tavolo, tavoloId, eventoId, tuttiCommensali, onClose }) =
         <PostoEditor
           commensale={commensali[editPosto]}
           tavoloNumero={tavolo.numero}
+          tavoloSala={tavolo.sala}
+          evento={evento}
           tuttiCommensali={tuttiCommensali}
           isExtra={editPosto >= tavolo.posti}
           numeroPosto={editPosto >= tavolo.posti ? editPosto - tavolo.posti + 1 : editPosto + 1}
@@ -1188,16 +1218,7 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
   const [tavoloSelezionato, setTavoloSelezionato] = useState(null);
   const [filtroSala, setFiltroSala] = useState('tutte');
 
-  const tavoliMap = useMemo(() => {
-    const tavoliBase = {};
-    TAVOLI_DEFAULT.forEach(t => {
-      tavoliBase[t.id] = {
-        ...t,
-        commensali: Array.from({ length: t.posti }, () => ({ nome: '', note: '', telefono: '' }))
-      };
-    });
-    return { ...tavoliBase, ...((evento && evento.tavoli) || {}) };
-  }, [evento]);
+  const tavoliMap = (evento && evento.tavoli) || {};
 
   const tuttiCommensali = useMemo(() => {
     const arr = [];
@@ -1217,13 +1238,16 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
     .filter(t => filtroSala === 'tutte' || t.sala === filtroSala)
     .sort((a, b) => (a.numero || 0) - (b.numero || 0));
 
-  let totaleOccupati = 0, totalePosti = 0, totaleExtra = 0;
+  let totaleOccupati = 0, totalePosti = 0, totaleExtra = 0, totalePagati = 0;
   Object.values(tavoliMap).forEach(t => {
     totalePosti += t.posti || 0;
     const occupatiTavolo = (t.commensali || []).filter(c => c && c.nome).length;
+    const pagatiTavolo = (t.commensali || []).filter(c => c && c.nome && c.pagato).length;
     totaleOccupati += occupatiTavolo;
+    totalePagati += pagatiTavolo;
     totaleExtra += Math.max(0, occupatiTavolo - (t.posti || 0));
   });
+  const daPagare = totaleOccupati - totalePagati;
 
   const esportaExcel = () => {
     const ws = XLSX.utils.json_to_sheet(
@@ -1232,8 +1256,9 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
         Sala: c.sala,
         Tavolo: c.tavolo,
         Posto: c.posto,
-        Note: c.note || '',
-        Telefono: c.telefono || ''
+        Pagato: c.pagato ? 'SÌ' : 'NO',
+        Telefono: c.telefono || '',
+        Note: c.note || ''
       }))
     );
     const wb = XLSX.utils.book_new();
@@ -1242,13 +1267,22 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
       .sort((a, b) => (a.numero || 0) - (b.numero || 0))
       .map(t => {
         const occ = (t.commensali || []).filter(c => c && c.nome).length;
+        const pag = (t.commensali || []).filter(c => c && c.nome && c.pagato).length;
         return {
           Tavolo: t.numero, Sala: t.sala, Posti: t.posti,
-          Occupati: occ, Liberi: Math.max(0, (t.posti || 0) - occ), Eccedenza: Math.max(0, occ - (t.posti || 0)),
-          Commensali: (t.commensali || []).filter(c => c && c.nome).map(c => c.nome).join(', ')
+          Occupati: occ, Pagati: pag, Da_pagare: occ - pag,
+          Liberi: Math.max(0, (t.posti || 0) - occ), Eccedenza: Math.max(0, occ - (t.posti || 0)),
+          Commensali: (t.commensali || []).filter(c => c && c.nome).map(c => `${c.nome}${c.pagato ? ' ✓' : ''}`).join(', ')
         };
       });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(riassunto), 'Tavoli');
+    // Foglio dedicato ai non pagati (utile per solleciti)
+    const nonPagati = tuttiCommensali.filter(c => !c.pagato).map(c => ({
+      Cognome_Nome: c.nome, Sala: c.sala, Tavolo: c.tavolo, Posto: c.posto, Telefono: c.telefono || ''
+    }));
+    if (nonPagati.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(nonPagati), 'Da_pagare');
+    }
     XLSX.writeFile(wb, `${evento.nome.replace(/[^a-z0-9]/gi, '_')}_${evento.data}.xlsx`);
   };
 
@@ -1257,13 +1291,15 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
       `🏛️ *${evento.nome}*`,
       `📅 ${fmtDataLunga(evento.data)}`,
       `🍽️ ${totaleOccupati}/${totalePosti} posti occupati${totaleExtra > 0 ? ` (+${totaleExtra} extra)` : ''}`,
+      `💰 ${totalePagati}/${totaleOccupati} quote pagate`,
       '',
       ...Object.values(tavoliMap)
         .sort((a, b) => (a.numero || 0) - (b.numero || 0))
         .map(t => {
-          const nomi = (t.commensali || []).filter(c => c && c.nome).map(c => c.nome);
-          if (nomi.length === 0) return null;
-          return `*Tavolo ${t.numero}* (${t.sala}, ${nomi.length}/${t.posti}):\n${nomi.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
+          const commens = (t.commensali || []).filter(c => c && c.nome);
+          if (commens.length === 0) return null;
+          return `*Tavolo ${t.numero}* (${t.sala}, ${commens.length}/${t.posti}):\n` +
+            commens.map((c, i) => `${i + 1}. ${c.nome}${c.pagato ? ' 💰' : ''}`).join('\n');
         })
         .filter(Boolean)
     ].join('\n\n');
@@ -1286,13 +1322,22 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
             <h1 className="font-display text-2xl sm:text-3xl">{evento.nome}</h1>
             <p className="text-white/80 capitalize">{fmtDataLunga(evento.data)}</p>
           </div>
-          <div className="text-right">
-            <p className="text-amber-300 text-xs">Occupazione</p>
-            <p className={`font-display text-3xl ${totaleExtra > 0 ? 'text-red-300' : ''}`}>{totaleOccupati} <span className="text-white/60 text-xl">/ {totalePosti}</span></p>
-            <p className={`text-xs ${totaleExtra > 0 ? 'text-red-200 font-bold' : 'text-white/70'}`}>{totaleExtra > 0 ? `+${totaleExtra} persone oltre capienza` : `${totalePosti > 0 ? Math.round(totaleOccupati / totalePosti * 100) : 0}%`}</p>
+          <div className="text-right space-y-2">
+            <div>
+              <p className="text-amber-300 text-xs">Occupazione</p>
+              <p className={`font-display text-3xl ${totaleExtra > 0 ? 'text-red-300' : ''}`}>{totaleOccupati} <span className="text-white/60 text-xl">/ {totalePosti}</span></p>
+              <p className={`text-xs ${totaleExtra > 0 ? 'text-red-200 font-bold' : 'text-white/70'}`}>{totaleExtra > 0 ? `+${totaleExtra} persone oltre capienza` : `${totalePosti > 0 ? Math.round(totaleOccupati / totalePosti * 100) : 0}%`}</p>
+            </div>
+            {totaleOccupati > 0 && (
+              <div className="bg-white/10 rounded-xl px-3 py-2 border border-white/15">
+                <p className="text-xs text-emerald-300">💰 Quote pagate</p>
+                <p className="font-display text-xl">{totalePagati} / {totaleOccupati}</p>
+                {daPagare > 0 && <p className="text-[10px] text-red-200">{daPagare} da riscuotere</p>}
+              </div>
+            )}
           </div>
         </div>
-        <div className="flex gap-2 mt-4">
+        <div className="flex flex-wrap gap-2 mt-4">
           <Btn variant="gold" onClick={esportaExcel}>📊 Esporta Excel</Btn>
           <Btn variant="gold" onClick={condividi}>📱 Condividi lista</Btn>
         </div>
@@ -1316,6 +1361,7 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
         {tavoliList.map(t => {
           const commensali = t.commensali || [];
           const occ = commensali.filter(c => c && c.nome).length;
+          const pag = commensali.filter(c => c && c.nome && c.pagato).length;
           const pieno = occ === t.posti;
           const oltre = occ > t.posti;
           const extra = Math.max(0, occ - t.posti);
@@ -1323,7 +1369,7 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
           const salaColor = t.sala === 'gialla' ? 'border-amber-400' : 'border-blue-400';
           return (
             <button key={t.tid} onClick={() => setTavoloSelezionato(t.tid)}
-              className={`surface-card card-lift rounded-2xl p-3 border-t-4 ${oltre ? 'border-red-500 ring-2 ring-red-300' : salaColor} text-left ${pieno ? 'ring-2 ring-emerald-400' : ''}`}>
+              className={`surface-card card-lift rounded-2xl p-3 border-t-4 ${oltre ? 'border-red-500 ring-2 ring-red-300' : salaColor} text-left ${pieno && !oltre ? 'ring-2 ring-emerald-400' : ''}`}>
               <div className="flex justify-between items-start mb-2">
                 <span className="font-display text-2xl text-blue-900">{t.numero}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${oltre ? 'over-badge' : pieno ? 'bg-emerald-100 text-emerald-700' : vuoto ? 'bg-gray-100 text-gray-500' : 'bg-amber-100 text-amber-700'}`}>
@@ -1333,7 +1379,11 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
               <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
                 <div className={`h-full transition-all ${oltre ? 'bg-red-500' : pieno ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(100, (occ / t.posti) * 100)}%` }}></div>
               </div>
-              <div className="flex justify-between mt-1"><p className="text-[10px] text-gray-400 capitalize">Sala {t.sala}</p>{oltre && <p className="text-[10px] text-red-600 font-bold">+{extra} extra</p>}</div>
+              <div className="flex justify-between mt-1 text-[10px]">
+                <p className="text-gray-400 capitalize">Sala {t.sala}</p>
+                {occ > 0 && <p className="text-emerald-700 font-bold">💰 {pag}/{occ}</p>}
+                {oltre && <p className="text-red-600 font-bold">+{extra}</p>}
+              </div>
             </button>
           );
         })}
@@ -1344,6 +1394,7 @@ const EventoDettaglio = ({ eventoId, onIndietro }) => {
           tavolo={tavoliMap[tavoloSelezionato]}
           tavoloId={tavoloSelezionato}
           eventoId={eventoId}
+          evento={evento}
           tuttiCommensali={tuttiCommensali}
           onClose={() => setTavoloSelezionato(null)}
         />
@@ -1424,11 +1475,6 @@ const TavoliSection = ({ tavoli }) => {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <p className="font-bold">Questa sezione serve solo a configurare numero, sala e capienza dei tavoli.</p>
-        <p className="mt-1">Per registrare le persone vai in <strong>Prenotazioni</strong>, apri l’evento e poi seleziona il tavolo.</p>
-      </div>
-
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-gradient-to-br from-amber-400 to-amber-600 text-white rounded-2xl p-4">
           <p className="text-xs text-white/80 uppercase tracking-wide">Sala gialla</p>
@@ -1484,16 +1530,6 @@ const App = () => {
   const [eventi] = useDB('taverna/eventi');
   const [tavoli, tavoliLoading] = useDB('taverna/tavoli');
 
-  // I tavoli storici della Taverna sono sempre disponibili nell'interfaccia.
-  // I dati presenti su Firebase li modificano o aggiungono, ma un database
-  // ancora vuoto non può più far apparire le due sale con 0 tavoli.
-  const tavoliAttivi = useMemo(() => {
-    const predefiniti = {};
-    TAVOLI_DEFAULT.forEach(t => { predefiniti[t.id] = { ...t }; });
-    return { ...predefiniti, ...tavoli };
-  }, [tavoli]);
-
-  // bootstrap tavoli default al primo avvio
   useEffect(() => {
     if (!tavoliLoading && Object.keys(tavoli).length === 0 && firebaseOk) {
       const obj = {};
@@ -1523,8 +1559,8 @@ const App = () => {
     { id: 'fornitori', icon: '🏪', label: 'Fornitori' },
   ];
   const tabsSala = [
-    { id: 'eventi', icon: '📝', label: 'Prenotazioni' },
-    { id: 'tavoli', icon: '🪑', label: 'Configurazione' },
+    { id: 'eventi', icon: '🍽️', label: 'Eventi' },
+    { id: 'tavoli', icon: '🪑', label: 'Tavoli' },
   ];
 
   return (
@@ -1541,8 +1577,8 @@ const App = () => {
       ) : (
         <>
           <SubNav tabs={tabsSala} active={tabSala} onChange={setTabSala} />
-          {tabSala === 'eventi' && <EventiSection eventi={eventi} tavoli={tavoliAttivi} onApriEvento={setEventoAperto} />}
-          {tabSala === 'tavoli' && <TavoliSection tavoli={tavoliAttivi} />}
+          {tabSala === 'eventi' && <EventiSection eventi={eventi} tavoli={tavoli} onApriEvento={setEventoAperto} />}
+          {tabSala === 'tavoli' && <TavoliSection tavoli={tavoli} />}
         </>
       )}
       <footer className="text-center py-6 text-xs text-gray-400">
